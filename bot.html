@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kronos BTC bot</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --fg: #e6edf3; --muted: #8b949e;
+    --good: #3fb950; --bad: #f85149; --blue: #58a6ff; --amber: #d29922; --grid: #21262d;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  html, body { background: var(--bg); color: var(--fg); margin: 0; font-family: system-ui, sans-serif; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--grid); display: flex; justify-content: space-between; align-items: baseline; }
+  header h1 { font-size: 16px; margin: 0; }
+  main { padding: 16px 20px; max-width: 1100px; margin: 0 auto; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .tile { background: var(--panel); border: 1px solid var(--grid); border-radius: 6px; padding: 10px 12px; }
+  .tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .tile .val { font-size: 22px; font-family: var(--mono); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .tile .sub { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-top: 1px; }
+  .panel { background: var(--panel); border: 1px solid var(--grid); border-radius: 6px; padding: 14px 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); margin: 0 0 10px; }
+  .mkt { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .mkt .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .mkt .v { font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; }
+  button { font: inherit; background: var(--blue); color: #0e1116; border: none; border-radius: 6px; padding: 10px 18px; font-weight: 600; cursor: pointer; margin-right: 8px; }
+  button.yes { background: var(--good); color: #052c0e; }
+  button.no  { background: var(--bad);  color: #2b0c0b; color: #fff; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--grid); }
+  .three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+  .src .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
+  .src .pct { font-family: var(--mono); font-size: 18px; font-weight: 600; }
+  .bar { height: 7px; border-radius: 4px; background: var(--grid); position: relative; overflow: hidden; margin-top: 4px; }
+  .bar > span { position: absolute; top: 0; bottom: 0; left: 0; background: var(--blue); }
+  .forecast { margin-top: 14px; display: none; }
+  .forecast.show { display: block; }
+  .sidelbl { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-left: 6px; }
+  .sidelbl.yes { background: rgba(63,185,80,0.18); color: var(--good); }
+  .sidelbl.no  { background: rgba(248,81,73,0.18); color: var(--bad); }
+  .disagree { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--amber); color: var(--amber); margin-left: 6px; }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  th, td { padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+  th:first-child, td:first-child { text-align: left; }
+  tr.win td.pnl { color: var(--good); } tr.loss td.pnl { color: var(--bad); }
+  .msg { font-family: var(--mono); font-size: 12px; margin-top: 10px; color: var(--muted); }
+  .msg.err { color: var(--bad); }
+  .msg.ok { color: var(--good); }
+  .footnote { color: var(--muted); font-size: 11px; margin-top: 12px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kronos BTC bot <span style="color:var(--muted);font-size:12px;margin-left:8px;">paper, interactive Follow-Kronos</span></h1>
+  <div style="color:var(--muted);font-size:12px;font-family:var(--mono);">updated <span id="updated">-</span></div>
+</header>
+
+<main>
+  <div class="tiles" id="tiles"></div>
+
+  <div class="panel">
+    <h2>Current window</h2>
+    <div class="mkt" id="mkt"><div style="color:var(--muted)">loading...</div></div>
+    <div style="margin-top:14px;">
+      <button id="predictBtn" onclick="doPredict()">Run prediction</button>
+      <button id="refreshBtn" class="ghost" onclick="refreshAll()">Refresh</button>
+      <span id="predictMsg" class="msg"></span>
+    </div>
+
+    <div class="forecast" id="forecast">
+      <div class="mkt" style="margin-top:14px;">
+        <div><div class="label">Spot at decision</div><div class="v" id="fSpot">-</div></div>
+        <div><div class="label">Kronos predicted close</div><div class="v" id="fKronos">-</div></div>
+        <div><div class="label">Direction</div><div class="v" id="fDir">-</div></div>
+        <div><div class="label">Path spread (1σ)</div><div class="v" id="fSpread">-</div></div>
+        <div><div class="label">Forecast time</div><div class="v" id="fSecs">-</div></div>
+      </div>
+      <div class="three">
+        <div class="src"><div class="label">Kronos</div><div class="pct" id="pKronos">-</div><div class="bar"><span id="barKronos"></span></div></div>
+        <div class="src"><div class="label">Zero-drift</div><div class="pct" id="pZero">-</div><div class="bar"><span id="barZero"></span></div></div>
+        <div class="src"><div class="label">Market</div><div class="pct" id="pMkt">-</div><div class="bar"><span id="barMkt"></span></div></div>
+      </div>
+      <div style="margin-top:14px;">
+        <button id="tradeBtn" onclick="doTrade()">Place trade</button>
+        <span id="tradeMsg" class="msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Your trades</h2>
+    <div id="tableWrap" style="max-height: 480px; overflow: auto;"></div>
+  </div>
+
+  <div class="footnote">
+    All trades are paper. New ledger: $1,000 starting cash, logged to <code>bot_ledger.json</code>.
+    Our 288-window backtest showed Kronos-small has no edge on 15-min BTC — treat predictions as curiosity, not signal.
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (x, d=2) => (x == null || Number.isNaN(x)) ? "-" : (+x).toFixed(d);
+const money = v => (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const pct = v => v == null ? "-" : (100 * v).toFixed(0) + "%";
+let currentMarket = null;
+let currentPred = null;
+
+async function fetchJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+async function loadMarket() {
+  try {
+    const m = await fetchJSON("/api/market");
+    currentMarket = m.ok ? m : null;
+    renderMarket(m);
+  } catch (e) {
+    $("mkt").innerHTML = `<div style="color:var(--bad)">error: ${e}</div>`;
+  }
+}
+
+async function loadLedger() {
+  try {
+    const L = await fetchJSON("/api/ledger");
+    renderLedger(L);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderMarket(m) {
+  if (!m.ok) {
+    $("mkt").innerHTML = `<div style="color:var(--muted)">${m.error || "no market"}</div>`;
+    $("predictBtn").disabled = true;
+    return;
+  }
+  const sideMid = m.yes_bid && m.yes_ask ? ((m.yes_bid + m.yes_ask) / 2) : null;
+  $("mkt").innerHTML = `
+    <div><div class="label">Ticker</div><div class="v" style="font-size:13px;">${m.ticker}</div></div>
+    <div><div class="label">Strike (start)</div><div class="v">${m.strike != null ? money(m.strike) : "<span style='color:var(--muted);font-size:14px;'>pending</span>"}</div></div>
+    <div><div class="label">Yes ask</div><div class="v">${(m.yes_ask * 100).toFixed(0)}¢</div></div>
+    <div><div class="label">No ask</div><div class="v">${(m.no_ask * 100).toFixed(0)}¢</div></div>
+    <div><div class="label">Mkt implied</div><div class="v">${sideMid != null ? (sideMid * 100).toFixed(0) + '%' : '-'}<span style="font-size:11px;color:var(--muted);"> up</span></div></div>
+    <div><div class="label">Closes in</div><div class="v">${m.mins_left.toFixed(1)}m</div></div>
+  `;
+  $("predictBtn").disabled = (m.strike == null);
+}
+
+async function doPredict() {
+  $("predictMsg").className = "msg";
+  $("predictMsg").textContent = "running Kronos...";
+  $("predictBtn").disabled = true;
+  try {
+    const p = await fetchJSON("/api/predict", {method: "POST"});
+    if (!p.ok) { $("predictMsg").className = "msg err"; $("predictMsg").textContent = p.error; return; }
+    currentPred = p;
+    renderForecast(p);
+    $("forecast").classList.add("show");
+    $("predictMsg").className = "msg ok";
+    $("predictMsg").textContent = `done in ${p.model_secs}s`;
+  } catch (e) {
+    $("predictMsg").className = "msg err"; $("predictMsg").textContent = "error: " + e;
+  } finally {
+    $("predictBtn").disabled = false;
+  }
+}
+
+function renderForecast(p) {
+  const move = p.kronos_median - p.spot;
+  const movePct = (100 * move / p.spot).toFixed(3);
+  const arrow = move >= 0 ? "▲" : "▼";
+  const arrowColor = move >= 0 ? "var(--good)" : "var(--bad)";
+  $("fSpot").innerHTML = money(p.spot);
+  $("fKronos").innerHTML = `${money(p.kronos_median)} <span style="color:${arrowColor};font-size:14px;">${arrow}</span>`;
+  $("fDir").innerHTML = `<span style="color:${arrowColor}">${move >= 0 ? "UP" : "DOWN"}</span> <span style="color:var(--muted);font-size:12px;">${move >= 0 ? "+" : ""}${movePct}%</span>`;
+  $("fSpread").textContent = p.sigma_pct.toFixed(3) + "%";
+  $("fSecs").textContent = p.model_secs.toFixed(1) + "s";
+  $("pKronos").textContent = pct(p.p.kronos);
+  $("pZero").textContent = pct(p.p.zero_drift);
+  $("pMkt").textContent = pct(p.p.market);
+  $("barKronos").style.width = (100 * (p.p.kronos || 0)) + "%";
+  $("barZero").style.width = (100 * (p.p.zero_drift || 0)) + "%";
+  $("barMkt").style.width = (100 * (p.p.market || 0)) + "%";
+  const sideLabel = p.side === "yes" ? "YES (close ≥ strike)" : "NO (close < strike)";
+  const disagree = p.agrees_with_market === false ? `<span class="disagree">disagrees with market</span>` : "";
+  $("tradeBtn").innerHTML = `Place trade: ${p.contracts} × ${p.side.toUpperCase()} @ ${(p.price*100).toFixed(0)}¢ ($${p.cost.toFixed(2)}) <span class="sidelbl ${p.side}">${sideLabel}</span>${disagree}`;
+  $("tradeBtn").className = p.side === "yes" ? "yes" : "no";
+  $("tradeBtn").disabled = false;
+  $("tradeMsg").textContent = "";
+}
+
+async function doTrade() {
+  if (!currentPred) return;
+  $("tradeBtn").disabled = true;
+  $("tradeMsg").className = "msg";
+  $("tradeMsg").textContent = "placing...";
+  try {
+    const r = await fetchJSON("/api/trade", {method: "POST", headers: {"content-type": "application/json"},
+                                              body: JSON.stringify({ticker: currentPred.ticker})});
+    if (!r.ok) { $("tradeMsg").className = "msg err"; $("tradeMsg").textContent = r.error; $("tradeBtn").disabled = false; return; }
+    $("tradeMsg").className = "msg ok";
+    $("tradeMsg").textContent = `logged. cash now ${money(r.cash)}`;
+    await loadLedger();
+  } catch (e) {
+    $("tradeMsg").className = "msg err"; $("tradeMsg").textContent = "error: " + e;
+    $("tradeBtn").disabled = false;
+  }
+}
+
+function renderLedger(L) {
+  const ws = L.windows || [];
+  const settled = ws.filter(w => w.result);
+  const trades = ws.filter(w => w.trade);
+  const wins = trades.filter(w => w.pnl != null && w.pnl > 0);
+  const pnl = trades.reduce((s, w) => s + (w.pnl || 0), 0);
+  const cashCls = pnl > 0 ? "good" : pnl < 0 ? "bad" : "";
+  $("tiles").innerHTML = [
+    tile("Cash", money(L.cash), `start ${money(L.start_cash)}`),
+    tile("P&L", `<span style="color:${pnl >= 0 ? 'var(--good)' : 'var(--bad)'}">${pnl >= 0 ? "+" : ""}${money(pnl)}</span>`, `${trades.length} trades`),
+    tile("Wins", String(wins.length), `${trades.length ? ((100 * wins.length / trades.length) | 0) : 0}% hit`),
+    tile("Pending", String(trades.length - settled.length), `${settled.length} settled`),
+  ].join("");
+  renderTable(ws);
+  $("updated").textContent = new Date().toLocaleTimeString();
+}
+
+function tile(label, val, sub) {
+  return `<div class="tile"><div class="label">${label}</div><div class="val">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+function renderTable(ws) {
+  if (!ws.length) {
+    $("tableWrap").innerHTML = `<div style="color:var(--muted);padding:12px;">No trades yet. Click Predict then Place trade to log one.</div>`;
+    return;
+  }
+  const head = `<thead><tr>
+    <th>decided</th><th>strike</th><th>spot</th><th>k_med</th>
+    <th>side</th><th>price</th><th>n</th><th>cost</th>
+    <th>p_k</th><th>p_mkt</th>
+    <th>result</th><th class="pnl">pnl</th>
+  </tr></thead>`;
+  const rows = ws.slice().reverse().map(w => {
+    const r = w.result;
+    const cls = w.pnl == null ? "" : (w.pnl > 0 ? "win" : (w.pnl < 0 ? "loss" : ""));
+    const t = w.trade || {};
+    const d = w.decided_utc ? w.decided_utc.slice(5, 16).replace("T", " ") : "-";
+    return `<tr class="${cls}">
+      <td>${d}</td>
+      <td>${fmt(w.strike)}</td>
+      <td>${fmt(w.spot)}</td>
+      <td>${fmt(w.kronos_median)}</td>
+      <td>${t.side || "-"}</td>
+      <td>${t.price != null ? (t.price * 100).toFixed(0) + "¢" : "-"}</td>
+      <td>${t.contracts || "-"}</td>
+      <td>${t.cost != null ? "$" + t.cost.toFixed(2) : "-"}</td>
+      <td>${fmt((w.p || {}).kronos, 3)}</td>
+      <td>${fmt((w.p || {}).market, 3)}</td>
+      <td>${r || '<span style="color:var(--muted)">pending</span>'}</td>
+      <td class="pnl">${w.pnl == null ? "-" : (w.pnl >= 0 ? "+" : "") + w.pnl.toFixed(2)}</td>
+    </tr>`;
+  }).join("");
+  $("tableWrap").innerHTML = `<table>${head}<tbody>${rows}</tbody></table>`;
+}
+
+async function refreshAll() {
+  await loadMarket();
+  await loadLedger();
+}
+
+refreshAll();
+setInterval(loadMarket, 10000);
+setInterval(loadLedger, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kronos BTC 15-min desk</title>
+<meta http-equiv="refresh" content="60">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --fg: #e6edf3; --muted: #8b949e;
+    --good: #3fb950; --bad: #f85149; --blue: #58a6ff; --amber: #d29922; --grid: #21262d;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  html, body { background: var(--bg); color: var(--fg); margin: 0; font-family: system-ui, sans-serif; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--grid); display: flex; justify-content: space-between; align-items: baseline; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: 0.3px; }
+  header .meta { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  main { padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .tile { background: var(--panel); border: 1px solid var(--grid); border-radius: 6px; padding: 10px 12px; }
+  .tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .tile .val { font-size: 22px; font-family: var(--mono); margin-top: 3px; }
+  .tile .sub { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-top: 1px; }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+  .panel { background: var(--panel); border: 1px solid var(--grid); border-radius: 6px; padding: 10px 14px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); margin: 0 0 8px; }
+  canvas { width: 100%; height: 220px; display: block; }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  th, td { padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; text-align: right; background: var(--panel); position: sticky; top: 0; }
+  td:first-child, th:first-child { text-align: left; }
+  tr.win td.pnl { color: var(--good); }
+  tr.loss td.pnl { color: var(--bad); }
+  tr.pending td.result { color: var(--muted); }
+  .good { color: var(--good); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  .brier-row { display: flex; gap: 12px; margin-top: 6px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .brier-row span b { color: var(--fg); }
+  .err { color: var(--bad); padding: 20px; font-family: var(--mono); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kronos BTC 15-min desk <span class="muted" style="font-size:12px; margin-left:8px;">paper, Follow-Kronos</span></h1>
+  <div class="meta">updated <span id="updated">-</span></div>
+</header>
+<main id="root">
+  <div id="status"></div>
+  <div class="tiles" id="tiles"></div>
+  <div class="brier-row" id="brierRow"></div>
+  <div class="charts">
+    <div class="panel"><h2>Cumulative P&amp;L</h2><canvas id="pnlChart"></canvas></div>
+    <div class="panel"><h2>Direction accuracy (rolling 20)</h2><canvas id="dirChart"></canvas></div>
+  </div>
+  <div class="panel"><h2>Windows</h2><div id="tableWrap" style="max-height: 520px; overflow: auto;"></div></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (x, d = 2) => x == null || Number.isNaN(x) ? "-" : (+x).toFixed(d);
+const fmtInt = x => x == null ? "-" : String(x);
+const col = (good, bad, cond) => cond ? good : bad;
+
+async function load() {
+  let L;
+  try {
+    const r = await fetch("follow_ledger.json?t=" + Date.now());
+    if (!r.ok) throw new Error("fetch " + r.status);
+    L = await r.json();
+    $("status").innerHTML = "";
+  } catch (e) {
+    $("status").innerHTML = `<div class="err">Could not load follow_ledger.json: ${e}.<br>Start via <code>run_dashboard.bat</code> (serves this folder) and copy the ledger into D:\\Kronos\\.</div>`;
+    return;
+  }
+  render(L);
+}
+
+function tile(label, val, sub) {
+  return `<div class="tile"><div class="label">${label}</div><div class="val">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+function render(L) {
+  $("updated").textContent = new Date().toLocaleString();
+  const ws = L.windows || [];
+  const settled = ws.filter(w => w.result);
+  const trades = ws.filter(w => w.trade);
+  const wins = trades.filter(w => w.pnl != null && w.pnl > 0);
+  const losses = trades.filter(w => w.pnl != null && w.pnl < 0);
+  const pnl = trades.reduce((s, w) => s + (w.pnl || 0), 0);
+  const dirRight = settled.filter(w => (w.kronos_median >= w.strike) === (w.result === "yes")).length;
+  const disagree = settled.filter(w => w.agrees_with_market === false);
+  const disagreeWins = trades.filter(w => w.agrees_with_market === false && w.pnl > 0);
+  const brier = {};
+  for (const w of settled) {
+    const o = w.result === "yes" ? 1 : 0;
+    for (const k of Object.keys(w.p || {})) {
+      (brier[k] ||= []).push((w.p[k] - o) ** 2);
+    }
+  }
+  const brierMean = Object.fromEntries(Object.entries(brier).map(([k, v]) => [k, v.reduce((a, b) => a + b, 0) / v.length]));
+
+  const pnlCls = pnl >= 0 ? "good" : "bad";
+  $("tiles").innerHTML = [
+    tile("Cash", `$${fmt(L.cash)}`, `start $${fmt(L.start_cash)}`),
+    tile("P&amp;L", `<span class="${pnlCls}">${pnl >= 0 ? "+" : ""}$${fmt(pnl)}</span>`, `${trades.length} trades`),
+    tile("Wins", fmtInt(wins.length), `${trades.length ? ((100 * wins.length / trades.length) | 0) : 0}% hit`),
+    tile("Dir right", `${dirRight} / ${settled.length}`, `${settled.length ? ((100 * dirRight / settled.length) | 0) : 0}%`),
+    tile("Disagree", `${disagreeWins.length} / ${disagree.filter(w => w.trade).length || 0}`, `${disagree.length} vs market`),
+    tile("Settled", fmtInt(settled.length), `of ${ws.length}`),
+  ].join("");
+
+  const brierTxt = Object.entries(brierMean).map(([k, v]) => `<span><b>${k}</b> ${fmt(v, 3)}</span>`).join("");
+  $("brierRow").innerHTML = brierTxt ? "Brier &nbsp; " + brierTxt : "";
+
+  drawPnl(trades);
+  drawDir(settled);
+  drawTable(ws);
+}
+
+function lineChart(canvas, pts, { yFmt = (y) => fmt(y, 2), yZero = null, stroke = "#58a6ff", fill = null } = {}) {
+  const dpi = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpi; canvas.height = h * dpi;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpi, dpi);
+  ctx.clearRect(0, 0, w, h);
+  if (!pts.length) {
+    ctx.fillStyle = "#8b949e"; ctx.font = "12px ui-monospace"; ctx.textAlign = "center";
+    ctx.fillText("no data", w / 2, h / 2); return;
+  }
+  const pad = { l: 44, r: 10, t: 10, b: 20 };
+  const ys = pts.map(p => p[1]);
+  let ymin = Math.min(...ys), ymax = Math.max(...ys);
+  if (yZero !== null) { ymin = Math.min(ymin, yZero); ymax = Math.max(ymax, yZero); }
+  if (ymin === ymax) { ymin -= 1; ymax += 1; }
+  const span = ymax - ymin;
+  ymin -= span * 0.05; ymax += span * 0.05;
+  const x = i => pad.l + (i / Math.max(1, pts.length - 1)) * (w - pad.l - pad.r);
+  const y = v => pad.t + (1 - (v - ymin) / (ymax - ymin)) * (h - pad.t - pad.b);
+  // grid
+  ctx.strokeStyle = "#21262d"; ctx.lineWidth = 1;
+  ctx.fillStyle = "#8b949e"; ctx.font = "10px ui-monospace"; ctx.textAlign = "right";
+  for (let i = 0; i <= 4; i++) {
+    const v = ymin + (i / 4) * (ymax - ymin);
+    const yy = y(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
+    ctx.fillText(yFmt(v), pad.l - 4, yy + 3);
+  }
+  // zero line
+  if (yZero !== null && yZero > ymin && yZero < ymax) {
+    ctx.strokeStyle = "#8b949e"; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(pad.l, y(yZero)); ctx.lineTo(w - pad.r, y(yZero)); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.moveTo(x(0), y(yZero !== null ? yZero : ys[0]));
+    pts.forEach((p, i) => ctx.lineTo(x(i), y(p[1])));
+    ctx.lineTo(x(pts.length - 1), y(yZero !== null ? yZero : ys[0]));
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.strokeStyle = stroke; ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  pts.forEach((p, i) => { if (i === 0) ctx.moveTo(x(i), y(p[1])); else ctx.lineTo(x(i), y(p[1])); });
+  ctx.stroke();
+}
+
+function drawPnl(trades) {
+  let cum = 0;
+  const pts = trades.map(w => [w.decided_utc || w.open_utc, (cum += (w.pnl || 0))]);
+  lineChart($("pnlChart"), pts, { yFmt: v => "$" + fmt(v, 2), yZero: 0, stroke: "#3fb950", fill: "rgba(63,185,80,0.07)" });
+}
+
+function drawDir(settled) {
+  const win = 20;
+  const hits = settled.map(w => (w.kronos_median >= w.strike) === (w.result === "yes") ? 1 : 0);
+  const pts = [];
+  for (let i = 0; i < hits.length; i++) {
+    const lo = Math.max(0, i - win + 1);
+    const slice = hits.slice(lo, i + 1);
+    pts.push([i, slice.reduce((a, b) => a + b, 0) / slice.length]);
+  }
+  lineChart($("dirChart"), pts, { yFmt: v => (v * 100).toFixed(0) + "%", yZero: 0.5, stroke: "#58a6ff" });
+}
+
+function drawTable(ws) {
+  const head = `<thead><tr>
+    <th>open UTC</th><th>strike</th><th>spot</th><th>k_med</th><th>actual</th>
+    <th>p_k</th><th>p_z</th><th>p_mkt</th>
+    <th>side</th><th>price</th><th>n</th>
+    <th>agrees</th><th>result</th><th class="pnl">pnl</th>
+  </tr></thead>`;
+  const rows = ws.slice().reverse().map(w => {
+    const r = w.result;
+    const cls = w.pnl == null ? (r ? "" : "pending") : (w.pnl > 0 ? "win" : (w.pnl < 0 ? "loss" : ""));
+    const t = w.trade || {};
+    const o = w.open_utc ? w.open_utc.slice(5, 16).replace("T", " ") : "-";
+    return `<tr class="${cls}">
+      <td>${o}</td>
+      <td>${fmt(w.strike)}</td>
+      <td>${fmt(w.spot)}</td>
+      <td>${fmt(w.kronos_median)}</td>
+      <td>${w.actual != null ? fmt(w.actual) : "-"}</td>
+      <td>${fmt((w.p || {}).kronos, 3)}</td>
+      <td>${fmt((w.p || {}).zero_drift, 3)}</td>
+      <td>${fmt((w.p || {}).market, 3)}</td>
+      <td>${t.side || "-"}</td>
+      <td>${t.price != null ? fmt(t.price, 3) : "-"}</td>
+      <td>${t.contracts || "-"}</td>
+      <td class="${w.agrees ? "muted" : "bad"}">${w.agrees == null ? "-" : (w.agrees ? "y" : "n")}</td>
+      <td class="result">${r || "-"}</td>
+      <td class="pnl">${w.pnl == null ? "-" : (w.pnl >= 0 ? "+" : "") + fmt(w.pnl)}</td>
+    </tr>`;
+  }).join("");
+  $("tableWrap").innerHTML = `<table>${head}<tbody>${rows}</tbody></table>`;
+}
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

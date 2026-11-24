@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Vendored third-party code (cloned at setup time, not our code)
+Kronos-repo/
+
+# Model weights cache (~1 GB; downloaded on first run)
+hf_cache/
+
+# Research outputs and caches
+runs/
+cache/
+*.pkl
+*.log
+
+# Personal paper-trading ledgers (not for public history)
+follow_ledger.json
+follow_ledger_from_db.json
+bot_ledger.json
+settle_values.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
